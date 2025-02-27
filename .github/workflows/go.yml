@@ -30,5 +30,3 @@ jobs:
           draft: false
           prerelease: false
           files: ./compare_snapshots
-          env:
-            GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
