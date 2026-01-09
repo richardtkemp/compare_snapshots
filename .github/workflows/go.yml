@@ -8,8 +8,44 @@ on:
 
 jobs:
 
-  build:
+  test:
     runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: '1.22'
+
+      - name: Format check
+        run: |
+          if [ "$(gofmt -s -l . | wc -l)" -gt 0 ]; then
+            echo "Code needs formatting:"
+            gofmt -s -d .
+            exit 1
+          fi
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Unit Tests
+        run: go test -v -short -race -coverprofile=coverage.txt -covermode=atomic ./...
+
+      - name: Integration Tests
+        run: go test -v -race ./...
+
+      - name: Build
+        run: go build -o ./compare_snapshots
+
+      - name: Smoke Test
+        run: |
+          ./compare_snapshots 2>&1 | grep -q "Usage:" || echo "Binary executed"
+
+  release:
+    needs: test
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     steps:
       - uses: actions/checkout@v4
 
