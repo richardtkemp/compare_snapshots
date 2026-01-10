@@ -144,6 +144,15 @@ func CleanupTestSnapshots(t *testing.T, paths ...string)
 
 ## Manual Testing Workflow
 
+### Pre-commit Git Hook (Recommended)
+
+Install the automatic formatting hook:
+```bash
+./hooks/install.sh
+```
+
+This will automatically format Go files before each commit, preventing formatting issues.
+
 ### Pre-commit Testing Script (`test.sh`)
 ```bash
 #!/bin/bash
@@ -172,7 +181,10 @@ echo "All checks passed!"
 
 ### Usage:
 ```bash
-# Before committing
+# Install pre-commit hook (one time, recommended)
+./hooks/install.sh
+
+# Manual testing before committing
 chmod +x test.sh
 ./test.sh
 
