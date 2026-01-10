@@ -259,9 +259,6 @@ func (sc *SnapshotComparison) ScanSnapshots() error {
 	}
 
 	return sc.finishScanSnapshots()
-
-	// This code is now in the finishScanSnapshots function
-	return nil
 }
 
 // calculateDirectorySizes calculates total and unique sizes for directories
