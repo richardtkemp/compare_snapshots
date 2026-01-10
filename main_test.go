@@ -47,10 +47,10 @@ func TestCalculateDirectorySizes(t *testing.T) {
 
 	// Add a file with size=1000
 	file1 := &DirectoryEntry{
-		Name:   "file1.txt",
-		IsDir:  false,
-		Size:   1000,
-		Inode:  100,
+		Name:  "file1.txt",
+		IsDir: false,
+		Size:  1000,
+		Inode: 100,
 		SnapshotsInfo: map[string]bool{
 			"snap1": true,
 		},
@@ -58,10 +58,10 @@ func TestCalculateDirectorySizes(t *testing.T) {
 
 	// Add another file with size=2000
 	file2 := &DirectoryEntry{
-		Name:   "file2.txt",
-		IsDir:  false,
-		Size:   2000,
-		Inode:  200,
+		Name:  "file2.txt",
+		IsDir: false,
+		Size:  2000,
+		Inode: 200,
 		SnapshotsInfo: map[string]bool{
 			"snap1": true,
 		},
@@ -75,10 +75,10 @@ func TestCalculateDirectorySizes(t *testing.T) {
 	}
 
 	file3 := &DirectoryEntry{
-		Name:   "file3.txt",
-		IsDir:  false,
-		Size:   500,
-		Inode:  300,
+		Name:  "file3.txt",
+		IsDir: false,
+		Size:  500,
+		Inode: 300,
 		SnapshotsInfo: map[string]bool{
 			"snap1": true,
 			"snap2": true, // Shared file
