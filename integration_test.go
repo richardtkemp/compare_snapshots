@@ -68,28 +68,25 @@ func TestBasicHardlinkDetection(t *testing.T) {
 	t.Logf("Found %d unique inodes", len(sc.InodeMap))
 
 	// Check if file1 appears in both snapshots
-	if files, ok := sc.InodeMap[inode1]; ok {
-		t.Logf("Inode %d has %d entries", inode1, len(files))
-		if len(files) > 0 {
-			t.Logf("  Snapshots for inode %d: %v", inode1, files[0].Snapshots)
-			if len(files[0].Snapshots) != 2 {
-				t.Errorf("Expected file1 to be in 2 snapshots, got %d", len(files[0].Snapshots))
-			}
+	if fileInfo, ok := sc.InodeMap[inode1]; ok {
+		t.Logf("Inode %d snapshots: %v", inode1, fileInfo.Snapshots)
+		if len(fileInfo.Snapshots) != 2 {
+			t.Errorf("Expected file1 to be in 2 snapshots, got %d", len(fileInfo.Snapshots))
 		}
 	} else {
 		t.Errorf("Inode %d not found in InodeMap", inode1)
 	}
 
 	// Check unique files
-	if files, ok := sc.InodeMap[inode2]; ok {
-		if len(files) > 0 && len(files[0].Snapshots) != 1 {
-			t.Errorf("Expected file2 to be in 1 snapshot, got %d", len(files[0].Snapshots))
+	if fileInfo, ok := sc.InodeMap[inode2]; ok {
+		if len(fileInfo.Snapshots) != 1 {
+			t.Errorf("Expected file2 to be in 1 snapshot, got %d", len(fileInfo.Snapshots))
 		}
 	}
 
-	if files, ok := sc.InodeMap[inode3]; ok {
-		if len(files) > 0 && len(files[0].Snapshots) != 1 {
-			t.Errorf("Expected file3 to be in 1 snapshot, got %d", len(files[0].Snapshots))
+	if fileInfo, ok := sc.InodeMap[inode3]; ok {
+		if len(fileInfo.Snapshots) != 1 {
+			t.Errorf("Expected file3 to be in 1 snapshot, got %d", len(fileInfo.Snapshots))
 		}
 	}
 }
@@ -141,14 +138,11 @@ func TestThreeWaySnapshots(t *testing.T) {
 	}
 
 	// Verify the file is in all three snapshots
-	if files, ok := sc.InodeMap[inode1]; ok {
-		t.Logf("Inode %d has %d entries", inode1, len(files))
-		if len(files) > 0 {
-			snapCount := len(files[0].Snapshots)
-			t.Logf("  File appears in %d snapshots", snapCount)
-			if snapCount != 3 {
-				t.Errorf("Expected shared.txt to be in 3 snapshots, got %d", snapCount)
-			}
+	if fileInfo, ok := sc.InodeMap[inode1]; ok {
+		snapCount := len(fileInfo.Snapshots)
+		t.Logf("Inode %d appears in %d snapshots", inode1, snapCount)
+		if snapCount != 3 {
+			t.Errorf("Expected shared.txt to be in 3 snapshots, got %d", snapCount)
 		}
 	} else {
 		t.Errorf("Inode %d not found in InodeMap", inode1)
@@ -191,12 +185,10 @@ func TestEmptySnapshots(t *testing.T) {
 		t.Errorf("Expected 1 inode in map, got %d", len(sc.InodeMap))
 	}
 
-	totalFiles := 0
-	for _, files := range sc.InodeMap {
-		totalFiles += len(files)
-	}
+	// Count total unique inodes (each represents at least one file)
+	totalInodes := len(sc.InodeMap)
 
-	t.Logf("Total files found: %d", totalFiles)
+	t.Logf("Total unique inodes found: %d", totalInodes)
 }
 
 // TestSymlinkHandling tests behavior with symlinks
@@ -238,18 +230,15 @@ func TestSymlinkHandling(t *testing.T) {
 		t.Fatalf("ScanSnapshots failed: %v", err)
 	}
 
-	// Count total files found
-	totalFiles := 0
-	for _, files := range sc.InodeMap {
-		totalFiles += len(files)
-	}
+	// Count total unique inodes found
+	totalInodes := len(sc.InodeMap)
 
-	t.Logf("Found %d file entries with symlink present", totalFiles)
+	t.Logf("Found %d unique inodes with symlink present", totalInodes)
 
 	// This test documents current behavior
 	// The audit identified that filepath.Walk follows symlinks which could be problematic
-	if totalFiles > 2 {
-		t.Errorf("WARNING: Found more than 2 files (%d), symlink may be followed incorrectly", totalFiles)
+	if totalInodes > 2 {
+		t.Errorf("WARNING: Found more than 2 inodes (%d), symlink may be followed incorrectly", totalInodes)
 	}
 }
 
@@ -313,22 +302,22 @@ func TestDirectoryStructures(t *testing.T) {
 	}
 
 	// Verify dir1/file.txt is shared
-	if files, ok := sc.InodeMap[inode1]; ok {
-		if len(files) > 0 && len(files[0].Snapshots) != 2 {
-			t.Errorf("Expected dir1/file.txt to be in 2 snapshots, got %d", len(files[0].Snapshots))
+	if fileInfo, ok := sc.InodeMap[inode1]; ok {
+		if len(fileInfo.Snapshots) != 2 {
+			t.Errorf("Expected dir1/file.txt to be in 2 snapshots, got %d", len(fileInfo.Snapshots))
 		}
 	}
 
 	// Verify dir2/file.txt files are counted separately
-	if files, ok := sc.InodeMap[inode2a]; ok {
-		if len(files) > 0 && len(files[0].Snapshots) != 1 {
-			t.Errorf("Expected snapshot1 dir2/file.txt to be in 1 snapshot, got %d", len(files[0].Snapshots))
+	if fileInfo, ok := sc.InodeMap[inode2a]; ok {
+		if len(fileInfo.Snapshots) != 1 {
+			t.Errorf("Expected snapshot1 dir2/file.txt to be in 1 snapshot, got %d", len(fileInfo.Snapshots))
 		}
 	}
 
-	if files, ok := sc.InodeMap[inode2b]; ok {
-		if len(files) > 0 && len(files[0].Snapshots) != 1 {
-			t.Errorf("Expected snapshot2 dir2/file.txt to be in 1 snapshot, got %d", len(files[0].Snapshots))
+	if fileInfo, ok := sc.InodeMap[inode2b]; ok {
+		if len(fileInfo.Snapshots) != 1 {
+			t.Errorf("Expected snapshot2 dir2/file.txt to be in 1 snapshot, got %d", len(fileInfo.Snapshots))
 		}
 	}
 }

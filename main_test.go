@@ -92,10 +92,10 @@ func TestCalculateDirectorySizes(t *testing.T) {
 
 	// Create a comparison object with a proper InodeMap
 	sc := &SnapshotComparison{
-		InodeMap: map[uint64][]*FileInfo{
-			100: {{Path: "file1.txt", Size: 1000, Inode: 100, Snapshots: map[string]bool{"snap1": true}}},
-			200: {{Path: "file2.txt", Size: 2000, Inode: 200, Snapshots: map[string]bool{"snap1": true}}},
-			300: {{Path: "file3.txt", Size: 500, Inode: 300, Snapshots: map[string]bool{"snap1": true, "snap2": true}}},
+		InodeMap: map[uint64]*FileInfo{
+			100: {Paths: map[string]string{"snap1": "file1.txt"}, Size: 1000, Inode: 100, Snapshots: map[string]bool{"snap1": true}},
+			200: {Paths: map[string]string{"snap1": "file2.txt"}, Size: 2000, Inode: 200, Snapshots: map[string]bool{"snap1": true}},
+			300: {Paths: map[string]string{"snap1": "file3.txt", "snap2": "file3.txt"}, Size: 500, Inode: 300, Snapshots: map[string]bool{"snap1": true, "snap2": true}},
 		},
 	}
 

@@ -13,12 +13,12 @@ import (
 	"github.com/rivo/tview"
 )
 
-// FileInfo represents information about a file
+// FileInfo represents information about a file across snapshots
 type FileInfo struct {
-	Path      string
+	Paths     map[string]string // snapshot name -> relative path in that snapshot
 	Size      int64
 	Inode     uint64
-	Snapshots map[string]bool // which snapshots contain this file
+	Snapshots map[string]bool   // which snapshots contain this file
 }
 
 // DirectoryEntry represents a directory or file in the tree
@@ -44,17 +44,17 @@ const (
 
 // SnapshotComparison holds the comparison data
 type SnapshotComparison struct {
-	InodeMap          map[uint64][]*FileInfo // Map of inodes to files
-	Snapshots         []string               // List of snapshot names
-	SnapshotRootPaths map[string]string      // Map of snapshot names to root paths
-	RootEntry         *DirectoryEntry        // Root of the directory tree
-	CurrentPath       []string               // Current navigation path
-	ViewMode          ViewMode               // Current view mode
-	App               *tview.Application     // tview application
-	Tree              *tview.TreeView        // Tree view for navigation
-	StatusBar         *tview.TextView        // Status bar
-	InfoPanel         *tview.TextView        // Info panel
-	SortMode          SortMode               // Current sort mode
+	InodeMap          map[uint64]*FileInfo // Map of inode to file info (one entry per inode)
+	Snapshots         []string             // List of snapshot names
+	SnapshotRootPaths map[string]string    // Map of snapshot names to root paths
+	RootEntry         *DirectoryEntry      // Root of the directory tree
+	CurrentPath       []string             // Current navigation path
+	ViewMode          ViewMode             // Current view mode
+	App               *tview.Application   // tview application
+	Tree              *tview.TreeView      // Tree view for navigation
+	StatusBar         *tview.TextView      // Status bar
+	InfoPanel         *tview.TextView      // Info panel
+	SortMode          SortMode             // Current sort mode
 }
 
 // ViewMode represents different view modes
@@ -81,7 +81,7 @@ func NewSnapshotComparison(snapshots []string) (*SnapshotComparison, error) {
 	}
 
 	sc := &SnapshotComparison{
-		InodeMap:          make(map[uint64][]*FileInfo),
+		InodeMap:          make(map[uint64]*FileInfo),
 		Snapshots:         make([]string, len(snapshots)),
 		SnapshotRootPaths: make(map[string]string),
 		RootEntry: &DirectoryEntry{
@@ -138,18 +138,26 @@ func (sc *SnapshotComparison) ScanSnapshots() error {
 			if err != nil {
 				return fmt.Errorf("failed to get relative path for %s: %v", path, err)
 			}
-			
-			// Create or update file info in the inode map
-			fileInfo := &FileInfo{
-				Path:      relPath,
-				Size:      info.Size(),
-				Inode:     stat.Ino,
-				Snapshots: map[string]bool{snapshotName: true},
+
+			inode := stat.Ino
+
+			// Check if we've already seen this inode
+			fileInfo, exists := sc.InodeMap[inode]
+			if exists {
+				// Update existing FileInfo with this snapshot's information
+				fileInfo.Snapshots[snapshotName] = true
+				fileInfo.Paths[snapshotName] = relPath
+			} else {
+				// Create new FileInfo for this inode
+				fileInfo = &FileInfo{
+					Paths:     map[string]string{snapshotName: relPath},
+					Size:      info.Size(),
+					Inode:     inode,
+					Snapshots: map[string]bool{snapshotName: true},
+				}
+				sc.InodeMap[inode] = fileInfo
 			}
-			
-			// Add to inode map
-			sc.InodeMap[stat.Ino] = append(sc.InodeMap[stat.Ino], fileInfo)
-			
+
 			return nil
 		})
 		
@@ -223,31 +231,15 @@ func (sc *SnapshotComparison) ScanSnapshots() error {
 					
 					childEntry.Size = info.Size()
 					childEntry.Inode = stat.Ino
-					
-					// Determine file status
-					fileInfos := sc.InodeMap[stat.Ino]
-					if len(fileInfos) > 1 {
-						// If multiple files with same inode, check if they span snapshots
-						snapshotCount := 0
-						snapshotMap := make(map[string]bool)
-						for _, fi := range fileInfos {
-							for s := range fi.Snapshots {
-								if !snapshotMap[s] {
-									snapshotMap[s] = true
-									snapshotCount++
-								}
-							}
-						}
-						
-						if snapshotCount > 1 {
-							childEntry.Status = StatusShared
-							childEntry.UniqueSize = 0 // Shared files contribute 0 to unique size
-						} else {
-							childEntry.Status = StatusUnique
-							childEntry.UniqueSize = info.Size()
-						}
+
+					// Determine file status based on how many snapshots contain this inode
+					fileInfo := sc.InodeMap[stat.Ino]
+					if len(fileInfo.Snapshots) > 1 {
+						// File exists in multiple snapshots (hardlinked)
+						childEntry.Status = StatusShared
+						childEntry.UniqueSize = 0 // Shared files contribute 0 to unique size
 					} else {
-						// Only one file with this inode
+						// File exists in only one snapshot
 						childEntry.Status = StatusUnique
 						childEntry.UniqueSize = info.Size()
 					}

@@ -66,18 +66,19 @@ func GetInode(t *testing.T, path string) uint64 {
 	return stat.Ino
 }
 
-// VerifyInodeMap checks if inodes are correctly mapped
-func VerifyInodeMap(t *testing.T, inodeMap map[uint64][]*FileInfo, expectedInode uint64, expectedCount int) {
+// VerifyInodeMap checks if an inode exists and has the expected number of snapshots
+func VerifyInodeMap(t *testing.T, inodeMap map[uint64]*FileInfo, expectedInode uint64, expectedSnapshotCount int) {
 	t.Helper()
 
-	files, exists := inodeMap[expectedInode]
+	fileInfo, exists := inodeMap[expectedInode]
 	if !exists {
 		t.Errorf("Inode %d not found in map", expectedInode)
 		return
 	}
 
-	if len(files) != expectedCount {
-		t.Errorf("Inode %d: expected %d files, got %d", expectedInode, expectedCount, len(files))
+	actualCount := len(fileInfo.Snapshots)
+	if actualCount != expectedSnapshotCount {
+		t.Errorf("Inode %d: expected %d snapshots, got %d", expectedInode, expectedSnapshotCount, actualCount)
 	}
 }
 
