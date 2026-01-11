@@ -1,0 +1,33 @@
+#!/bin/bash
+# Pre-commit hook to automatically format Go code with gofmt
+
+# Get list of Go files that are staged for commit
+GO_FILES=$(git diff --cached --name-only --diff-filter=ACM | grep '\.go$')
+
+# Exit early if no Go files are being committed
+if [ -z "$GO_FILES" ]; then
+    exit 0
+fi
+
+# Format each Go file
+NEEDS_FORMAT=false
+for file in $GO_FILES; do
+    # Only format if file exists (could be deleted)
+    if [ -f "$file" ]; then
+        # Run gofmt and check if file would change
+        if ! gofmt -l "$file" | grep -q "$file"; then
+            continue
+        fi
+
+        NEEDS_FORMAT=true
+        echo "Formatting $file"
+        gofmt -s -w "$file"
+        git add "$file"
+    fi
+done
+
+if [ "$NEEDS_FORMAT" = true ]; then
+    echo "✓ Go files formatted and re-staged"
+fi
+
+exit 0

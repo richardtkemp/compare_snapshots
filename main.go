@@ -13,9 +13,9 @@ import (
 	"github.com/rivo/tview"
 )
 
-// FileInfo represents information about a file
+// FileInfo represents information about a file across snapshots
 type FileInfo struct {
-	Path      string
+	Paths     map[string]string // snapshot name -> relative path in that snapshot
 	Size      int64
 	Inode     uint64
 	Snapshots map[string]bool // which snapshots contain this file
@@ -38,23 +38,23 @@ type FileStatus int
 
 const (
 	StatusShared    FileStatus = iota // Same inode in multiple snapshots
-	StatusDifferent                    // Different inodes in different snapshots
-	StatusUnique                       // Exists only in one snapshot
+	StatusDifferent                   // Different inodes in different snapshots
+	StatusUnique                      // Exists only in one snapshot
 )
 
 // SnapshotComparison holds the comparison data
 type SnapshotComparison struct {
-	InodeMap          map[uint64][]*FileInfo // Map of inodes to files
-	Snapshots         []string               // List of snapshot names
-	SnapshotRootPaths map[string]string      // Map of snapshot names to root paths
-	RootEntry         *DirectoryEntry        // Root of the directory tree
-	CurrentPath       []string               // Current navigation path
-	ViewMode          ViewMode               // Current view mode
-	App               *tview.Application     // tview application
-	Tree              *tview.TreeView        // Tree view for navigation
-	StatusBar         *tview.TextView        // Status bar
-	InfoPanel         *tview.TextView        // Info panel
-	SortMode          SortMode               // Current sort mode
+	InodeMap          map[uint64]*FileInfo // Map of inode to file info (one entry per inode)
+	Snapshots         []string             // List of snapshot names
+	SnapshotRootPaths map[string]string    // Map of snapshot names to root paths
+	RootEntry         *DirectoryEntry      // Root of the directory tree
+	CurrentPath       []string             // Current navigation path
+	ViewMode          ViewMode             // Current view mode
+	App               *tview.Application   // tview application
+	Tree              *tview.TreeView      // Tree view for navigation
+	StatusBar         *tview.TextView      // Status bar
+	InfoPanel         *tview.TextView      // Info panel
+	SortMode          SortMode             // Current sort mode
 }
 
 // ViewMode represents different view modes
@@ -81,7 +81,7 @@ func NewSnapshotComparison(snapshots []string) (*SnapshotComparison, error) {
 	}
 
 	sc := &SnapshotComparison{
-		InodeMap:          make(map[uint64][]*FileInfo),
+		InodeMap:          make(map[uint64]*FileInfo),
 		Snapshots:         make([]string, len(snapshots)),
 		SnapshotRootPaths: make(map[string]string),
 		RootEntry: &DirectoryEntry{
@@ -111,88 +111,96 @@ func NewSnapshotComparison(snapshots []string) (*SnapshotComparison, error) {
 // ScanSnapshots scans all snapshots and builds the file index
 func (sc *SnapshotComparison) ScanSnapshots() error {
 	fmt.Println("Starting first pass: building inode map...")
-	
+
 	// First pass: scan all files and build inode map
 	for _, snapshotName := range sc.Snapshots {
 		rootPath := sc.SnapshotRootPaths[snapshotName]
 		fmt.Printf("Scanning snapshot: %s at %s\n", snapshotName, rootPath)
-		
+
 		err := filepath.Walk(rootPath, func(path string, info os.FileInfo, err error) error {
 			if err != nil {
 				return err
 			}
-			
+
 			// Skip directories in the inode map
 			if info.IsDir() {
 				return nil
 			}
-			
+
 			// Get the inode number
 			stat, ok := info.Sys().(*syscall.Stat_t)
 			if !ok {
 				return fmt.Errorf("failed to get system info for %s", path)
 			}
-			
+
 			// Relativize the path to the snapshot root
 			relPath, err := filepath.Rel(rootPath, path)
 			if err != nil {
 				return fmt.Errorf("failed to get relative path for %s: %v", path, err)
 			}
-			
-			// Create or update file info in the inode map
-			fileInfo := &FileInfo{
-				Path:      relPath,
-				Size:      info.Size(),
-				Inode:     stat.Ino,
-				Snapshots: map[string]bool{snapshotName: true},
+
+			inode := stat.Ino
+
+			// Check if we've already seen this inode
+			fileInfo, exists := sc.InodeMap[inode]
+			if exists {
+				// Update existing FileInfo with this snapshot's information
+				fileInfo.Snapshots[snapshotName] = true
+				fileInfo.Paths[snapshotName] = relPath
+			} else {
+				// Create new FileInfo for this inode
+				fileInfo = &FileInfo{
+					Paths:     map[string]string{snapshotName: relPath},
+					Size:      info.Size(),
+					Inode:     inode,
+					Snapshots: map[string]bool{snapshotName: true},
+				}
+				sc.InodeMap[inode] = fileInfo
 			}
-			
-			// Add to inode map
-			sc.InodeMap[stat.Ino] = append(sc.InodeMap[stat.Ino], fileInfo)
-			
+
 			return nil
 		})
-		
+
 		if err != nil {
 			return fmt.Errorf("failed to scan snapshot %s: %v", snapshotName, err)
 		}
 	}
-	
+
 	fmt.Printf("First pass complete. Found %d unique inodes.\n", len(sc.InodeMap))
 	fmt.Println("Starting second pass: building directory tree...")
-	
+
 	// Second pass: build directory tree and calculate sizes
 	for _, snapshotName := range sc.Snapshots {
 		rootPath := sc.SnapshotRootPaths[snapshotName]
 		fmt.Printf("Building tree for snapshot: %s\n", snapshotName)
-		
+
 		fileCount := 0
 		dirCount := 0
-		
+
 		err := filepath.Walk(rootPath, func(path string, info os.FileInfo, err error) error {
 			if err != nil {
 				return err
 			}
-			
+
 			// Relativize the path to the snapshot root
 			relPath, err := filepath.Rel(rootPath, path)
 			if err != nil {
 				return fmt.Errorf("failed to get relative path for %s: %v", path, err)
 			}
-			
+
 			// Skip root
 			if relPath == "." {
 				return nil
 			}
-			
+
 			parts := strings.Split(relPath, string(filepath.Separator))
 			currentEntry := sc.RootEntry
-			
+
 			// Navigate/create the path in our tree
 			for i, part := range parts {
 				isLast := i == len(parts)-1
 				childEntry, exists := currentEntry.Children[part]
-				
+
 				if !exists {
 					// Create new entry
 					childEntry = &DirectoryEntry{
@@ -202,7 +210,7 @@ func (sc *SnapshotComparison) ScanSnapshots() error {
 						SnapshotsInfo: map[string]bool{snapshotName: true},
 					}
 					currentEntry.Children[part] = childEntry
-					
+
 					// Count new entries
 					if childEntry.IsDir {
 						dirCount++
@@ -213,63 +221,44 @@ func (sc *SnapshotComparison) ScanSnapshots() error {
 					// Update existing entry
 					childEntry.SnapshotsInfo[snapshotName] = true
 				}
-				
+
 				// If it's a file, update size and status
 				if isLast && !info.IsDir() {
 					stat, ok := info.Sys().(*syscall.Stat_t)
 					if !ok {
 						return fmt.Errorf("failed to get system info for %s", path)
 					}
-					
+
 					childEntry.Size = info.Size()
 					childEntry.Inode = stat.Ino
-					
-					// Determine file status
-					fileInfos := sc.InodeMap[stat.Ino]
-					if len(fileInfos) > 1 {
-						// If multiple files with same inode, check if they span snapshots
-						snapshotCount := 0
-						snapshotMap := make(map[string]bool)
-						for _, fi := range fileInfos {
-							for s := range fi.Snapshots {
-								if !snapshotMap[s] {
-									snapshotMap[s] = true
-									snapshotCount++
-								}
-							}
-						}
-						
-						if snapshotCount > 1 {
-							childEntry.Status = StatusShared
-							childEntry.UniqueSize = 0 // Shared files contribute 0 to unique size
-						} else {
-							childEntry.Status = StatusUnique
-							childEntry.UniqueSize = info.Size()
-						}
+
+					// Determine file status based on how many snapshots contain this inode
+					fileInfo := sc.InodeMap[stat.Ino]
+					if len(fileInfo.Snapshots) > 1 {
+						// File exists in multiple snapshots (hardlinked)
+						childEntry.Status = StatusShared
+						childEntry.UniqueSize = 0 // Shared files contribute 0 to unique size
 					} else {
-						// Only one file with this inode
+						// File exists in only one snapshot
 						childEntry.Status = StatusUnique
 						childEntry.UniqueSize = info.Size()
 					}
 				}
-				
+
 				currentEntry = childEntry
 			}
-			
+
 			return nil
 		})
-		
+
 		if err != nil {
 			return fmt.Errorf("failed to build directory tree for snapshot %s: %v", snapshotName, err)
 		}
-		
+
 		fmt.Printf("Added %d files and %d directories from snapshot %s\n", fileCount, dirCount, snapshotName)
 	}
-	
-	return sc.finishScanSnapshots()
 
-	// This code is now in the finishScanSnapshots function
-	return nil
+	return sc.finishScanSnapshots()
 }
 
 // calculateDirectorySizes calculates total and unique sizes for directories
@@ -331,7 +320,7 @@ func (sc *SnapshotComparison) BuildTreeView() {
 	if sc.Tree == nil {
 		sc.Tree = tview.NewTreeView()
 	}
-	
+
 	// Create a root node for the current directory
 	var rootText string
 	if len(sc.CurrentPath) == 0 {
@@ -339,10 +328,10 @@ func (sc *SnapshotComparison) BuildTreeView() {
 	} else {
 		rootText = sc.CurrentPath[len(sc.CurrentPath)-1] + "/"
 	}
-	
+
 	root := tview.NewTreeNode(rootText)
 	sc.Tree.SetRoot(root)
-	
+
 	// Get entries at current path
 	currentEntry := sc.RootEntry
 	for _, part := range sc.CurrentPath {
@@ -352,20 +341,20 @@ func (sc *SnapshotComparison) BuildTreeView() {
 			break
 		}
 	}
-	
+
 	// Add the current directory to the root reference (for info display)
 	root.SetReference(currentEntry)
-	
+
 	// Add only the children of the current directory to the tree
 	sc.addTreeNodes(root, currentEntry)
-	
+
 	// Set up keyboard handling
 	sc.Tree.SetSelectedFunc(func(node *tview.TreeNode) {
 		reference := node.GetReference()
 		if reference == nil {
 			return
 		}
-		
+
 		nodeInfo := reference.(*DirectoryEntry)
 		if nodeInfo.IsDir {
 			// Navigate into directory
@@ -378,22 +367,22 @@ func (sc *SnapshotComparison) BuildTreeView() {
 			sc.RefreshUI()
 		}
 	})
-	
+
 	// Handle node expansion - load contents when a directory is expanded
-	root.SetExpanded(true)  // Always expand the root node
+	root.SetExpanded(true) // Always expand the root node
 }
 
 // addTreeNodes adds directory entries as nodes to the tree
 func (sc *SnapshotComparison) addTreeNodes(parent *tview.TreeNode, entry *DirectoryEntry) {
 	// Clear existing children first
 	parent.ClearChildren()
-	
+
 	// Sort children by the current sort mode
 	var childNames []string
 	for name := range entry.Children {
 		childNames = append(childNames, name)
 	}
-	
+
 	// Apply sorting
 	switch sc.SortMode {
 	case SortBySize:
@@ -410,7 +399,7 @@ func (sc *SnapshotComparison) addTreeNodes(parent *tview.TreeNode, entry *Direct
 			return entry.Children[childNames[i]].Status < entry.Children[childNames[j]].Status
 		})
 	}
-	
+
 	// Add children to tree
 	for _, name := range childNames {
 		child := entry.Children[name]
@@ -420,32 +409,32 @@ func (sc *SnapshotComparison) addTreeNodes(parent *tview.TreeNode, entry *Direct
 		} else {
 			size = child.UniqueSize
 		}
-		
+
 		var nodeText string
 		var snapCount = len(child.SnapshotsInfo)
 		var statusText = statusToString(child.Status)
-		
+
 		if child.IsDir {
-			nodeText = fmt.Sprintf("[%s] %s/ %s (%d snaps, %s)", 
+			nodeText = fmt.Sprintf("[%s] %s/ %s (%d snaps, %s)",
 				sc.getStatusColor(child), name, formatSize(size), snapCount, statusText)
 		} else {
-			nodeText = fmt.Sprintf("[%s] %s %s (%d snaps, %s)", 
+			nodeText = fmt.Sprintf("[%s] %s %s (%d snaps, %s)",
 				sc.getStatusColor(child), name, formatSize(size), snapCount, statusText)
 		}
-		
+
 		childNode := tview.NewTreeNode(nodeText)
 		childNode.SetReference(child)
-		
+
 		// For directories, set expanded state and add placeholder if it has children
 		if child.IsDir && len(child.Children) > 0 {
 			// Initialize as collapsed
 			childNode.SetExpanded(false)
-			
+
 			// Add at least one placeholder child to show the expand arrow
 			placeholder := tview.NewTreeNode("Loading...")
 			childNode.AddChild(placeholder)
 		}
-		
+
 		parent.AddChild(childNode)
 	}
 }
@@ -454,13 +443,13 @@ func (sc *SnapshotComparison) addTreeNodes(parent *tview.TreeNode, entry *Direct
 func (sc *SnapshotComparison) expandDirectoryNode(node *tview.TreeNode, entry *DirectoryEntry) {
 	// Clear existing children (placeholder nodes)
 	node.ClearChildren()
-	
+
 	// Sort children by the current sort mode
 	var childNames []string
 	for name := range entry.Children {
 		childNames = append(childNames, name)
 	}
-	
+
 	// Apply sorting
 	switch sc.SortMode {
 	case SortBySize:
@@ -477,7 +466,7 @@ func (sc *SnapshotComparison) expandDirectoryNode(node *tview.TreeNode, entry *D
 			return entry.Children[childNames[i]].Status < entry.Children[childNames[j]].Status
 		})
 	}
-	
+
 	// Add all children to the expanded node
 	for _, name := range childNames {
 		child := entry.Children[name]
@@ -487,23 +476,23 @@ func (sc *SnapshotComparison) expandDirectoryNode(node *tview.TreeNode, entry *D
 		} else {
 			size = child.UniqueSize
 		}
-		
+
 		var nodeText string
 		if child.IsDir {
 			nodeText = fmt.Sprintf("[%s] %s/ %s", sc.getStatusColor(child), name, formatSize(size))
 		} else {
 			nodeText = fmt.Sprintf("[%s] %s %s", sc.getStatusColor(child), name, formatSize(size))
 		}
-		
+
 		childNode := tview.NewTreeNode(nodeText)
 		childNode.SetReference(child)
-		
+
 		// For directories, add a placeholder to indicate it has children
 		if child.IsDir && len(child.Children) > 0 {
 			childNode.SetExpanded(false)
 			childNode.AddChild(tview.NewTreeNode("..."))
 		}
-		
+
 		node.AddChild(childNode)
 	}
 }
@@ -529,11 +518,11 @@ func (sc *SnapshotComparison) UpdateInfoPanel(entry *DirectoryEntry) {
 	info.WriteString(fmt.Sprintf("Type: %s\n", boolToFileType(entry.IsDir)))
 	info.WriteString(fmt.Sprintf("Total Size: %s\n", formatSize(entry.Size)))
 	info.WriteString(fmt.Sprintf("Unique Size: %s\n", formatSize(entry.UniqueSize)))
-	
+
 	if !entry.IsDir {
 		info.WriteString(fmt.Sprintf("Inode: %d\n", entry.Inode))
 	}
-	
+
 	info.WriteString("Present in snapshots: ")
 	var snapshots []string
 	for snapshot := range entry.SnapshotsInfo {
@@ -542,9 +531,9 @@ func (sc *SnapshotComparison) UpdateInfoPanel(entry *DirectoryEntry) {
 	sort.Strings(snapshots)
 	info.WriteString(strings.Join(snapshots, ", "))
 	info.WriteString("\n")
-	
+
 	info.WriteString(fmt.Sprintf("Status: %s\n", statusToString(entry.Status)))
-	
+
 	sc.InfoPanel.SetText(info.String())
 }
 
@@ -553,14 +542,14 @@ func (sc *SnapshotComparison) UpdateStatusBar() {
 	var path strings.Builder
 	path.WriteString("/")
 	path.WriteString(strings.Join(sc.CurrentPath, "/"))
-	
+
 	var viewMode string
 	if sc.ViewMode == ViewTotal {
 		viewMode = "Total"
 	} else {
 		viewMode = "Unique"
 	}
-	
+
 	var sortMode string
 	switch sc.SortMode {
 	case SortBySize:
@@ -570,24 +559,24 @@ func (sc *SnapshotComparison) UpdateStatusBar() {
 	case SortByUniqueness:
 		sortMode = "Uniqueness"
 	}
-	
-	statusText := fmt.Sprintf("Path: %s | View: %s | Sort: %s | Toggle: t-view, s-sort | q-quit, u-up", 
+
+	statusText := fmt.Sprintf("Path: %s | View: %s | Sort: %s | Toggle: t-view, s-sort | q-quit, u-up",
 		path.String(), viewMode, sortMode)
-	
+
 	sc.StatusBar.SetText(statusText)
 }
 
 // Initialize initializes the UI components
 func (sc *SnapshotComparison) Initialize() {
 	app := tview.NewApplication()
-	
+
 	// Create tree view
 	tree := tview.NewTreeView()
 	tree.SetBorder(true)
 	tree.SetTitle("Directory Tree")
 	// Using standard ASCII prefixes instead of unicode
 	// and avoiding SetPrefixes and SetGraphics which might not be available
-	
+
 	// Create info panel
 	infoPanel := tview.NewTextView()
 	infoPanel.SetBorder(true)
@@ -595,18 +584,18 @@ func (sc *SnapshotComparison) Initialize() {
 	infoPanel.SetDynamicColors(true)
 	infoPanel.SetWordWrap(true)
 	infoPanel.SetScrollable(true)
-	
+
 	// Create status bar
 	statusBar := tview.NewTextView()
 	statusBar.SetBorder(true)
 	statusBar.SetTitle("Status")
 	statusBar.SetDynamicColors(true)
-	
+
 	// Create a header with snapshot info
 	headerText := tview.NewTextView()
 	headerText.SetBorder(true)
 	headerText.SetTitle("Snapshots")
-	
+
 	var header strings.Builder
 	header.WriteString("Comparing ")
 	header.WriteString(fmt.Sprintf("%d", len(sc.Snapshots)))
@@ -618,9 +607,9 @@ func (sc *SnapshotComparison) Initialize() {
 		header.WriteString(snapshot)
 	}
 	header.WriteString("\n[blue]Blue[white]: Shared files (hardlinked) | [red]Red[white]: Unique files | [yellow]Yellow[white]: Different content")
-	
+
 	headerText.SetText(header.String())
-	
+
 	// Create layout
 	flex := tview.NewFlex().
 		SetDirection(tview.FlexRow).
@@ -630,12 +619,12 @@ func (sc *SnapshotComparison) Initialize() {
 			AddItem(infoPanel, 0, 1, false),
 			0, 1, true).
 		AddItem(statusBar, 3, 1, false)
-	
+
 	sc.App = app
 	sc.Tree = tree
 	sc.InfoPanel = infoPanel
 	sc.StatusBar = statusBar
-	
+
 	// Set up input handling
 	app.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
 		switch event.Key() {
@@ -668,10 +657,10 @@ func (sc *SnapshotComparison) Initialize() {
 		}
 		return event
 	})
-	
+
 	// Build initial tree view
 	sc.BuildTreeView()
-	
+
 	// Set up tree selection handler
 	sc.Tree.SetChangedFunc(func(node *tview.TreeNode) {
 		reference := node.GetReference()
@@ -679,13 +668,13 @@ func (sc *SnapshotComparison) Initialize() {
 			sc.UpdateInfoPanel(reference.(*DirectoryEntry))
 		}
 	})
-	
+
 	// Since SetExpansionChangedFunc is not available, we'll use a different approach
 	// We'll modify the BuildTreeView and addTreeNodes functions to handle expansion properly
-	
+
 	// Update status bar
 	sc.UpdateStatusBar()
-	
+
 	// Set up main layout
 	app.SetRoot(flex, true)
 }
@@ -696,17 +685,17 @@ func (sc *SnapshotComparison) RefreshUI() {
 	if sc.App == nil {
 		return
 	}
-	
+
 	// Save the selected node if any
 	var selectedNode *tview.TreeNode
 	if sc.Tree != nil {
 		selectedNode = sc.Tree.GetCurrentNode()
 	}
-	
+
 	// Rebuild the tree view
 	sc.BuildTreeView()
 	sc.UpdateStatusBar()
-	
+
 	// Update info panel with current directory info
 	currentEntry := sc.RootEntry
 	for _, part := range sc.CurrentPath {
@@ -717,7 +706,7 @@ func (sc *SnapshotComparison) RefreshUI() {
 		}
 	}
 	sc.UpdateInfoPanel(currentEntry)
-	
+
 	// Try to restore selection
 	if selectedNode != nil && selectedNode.GetReference() != nil {
 		selectedEntry := selectedNode.GetReference().(*DirectoryEntry)
@@ -743,7 +732,7 @@ func (sc *SnapshotComparison) RefreshUI() {
 func (sc *SnapshotComparison) Run() error {
 	// Initialize UI components
 	sc.Initialize()
-	
+
 	// Set up tree selection handler before starting the app
 	if sc.Tree != nil {
 		sc.Tree.SetChangedFunc(func(node *tview.TreeNode) {
@@ -753,20 +742,20 @@ func (sc *SnapshotComparison) Run() error {
 			}
 		})
 	}
-	
+
 	// Build the UI
 	sc.BuildTreeView()
 	sc.UpdateStatusBar()
-	
+
 	// Update info panel with root directory
 	currentEntry := sc.RootEntry
 	sc.UpdateInfoPanel(currentEntry)
-	
+
 	// Select the root node to start
 	if sc.Tree != nil && sc.Tree.GetRoot() != nil {
 		sc.Tree.SetCurrentNode(sc.Tree.GetRoot())
 	}
-	
+
 	// Start the application
 	return sc.App.Run()
 }
@@ -824,7 +813,7 @@ func main() {
 
 	// Scan snapshots with progress indicator
 	fmt.Println("Scanning snapshots...")
-	
+
 	// Start a goroutine for the progress indicator
 	done := make(chan bool)
 	go func() {
@@ -841,17 +830,17 @@ func main() {
 			}
 		}
 	}()
-	
+
 	// Do the scanning
 	err = sc.ScanSnapshots()
 	done <- true
 	fmt.Println("\rScan completed!       ")
-	
+
 	if err != nil {
 		fmt.Printf("Error: %v\n", err)
 		os.Exit(1)
 	}
-	
+
 	// Print some debug info before running the UI
 	fmt.Printf("Scan completed!\n")
 	fmt.Printf("Root directory has %d children\n", len(sc.RootEntry.Children))
@@ -860,7 +849,7 @@ func main() {
 		fmt.Println("First few directories/files:")
 		count := 0
 		for name, entry := range sc.RootEntry.Children {
-			fmt.Printf("- %s (size: %s, unique: %s, status: %s)\n", 
+			fmt.Printf("- %s (size: %s, unique: %s, status: %s)\n",
 				name, formatSize(entry.Size), formatSize(entry.UniqueSize), statusToString(entry.Status))
 			count++
 			if count >= 5 {
